@@ -1,5 +1,5 @@
 #---------------------------------------------------------------------------------------------
-# python_cjt188 v01 -- a tool to test CJ/T 188 meter through RS485 to M-Bus
+# python_cjt188 v01 -- a tool to test CJ/T 188 meter through RS485 to M-Bus adapter
 # BSD license is applied to this code
 #
 # Python 2.7 is supported
@@ -29,7 +29,7 @@ C_READ_ADDR_RESP = 0x83
 C_SET_ADDR = 0x15
 C_SET_ADDR_RESP = 0x95
 
-debug_flag = 1
+debug_flag = 0
 
 #-------------------------
 # decode_cjt188
