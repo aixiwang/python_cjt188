@@ -4,12 +4,18 @@
 #
 # Python 2.7 is supported
 # Copyright by Aixi Wang (aixi.wang@hotmail.com)
+# Tested with DN15 flow meter as slave device. USB type M-Bus adapter as master node.
 #
 # support functions:
-# read meter data              yes
-# reset base initial value     no
+#-------------------------------------
 # read addr                    yes
-# set addr                     no
+# set addr                     yes
+# read meter data              test fail
+# reset base initial value     no
+#-------------------------------------
+# Found issues:
+# 1. crc error
+# 
 #---------------------------------------------------------------------------------------------
 import serial
 import sys,time
@@ -37,40 +43,42 @@ debug_flag = 0
 # return: errcode,T,addr,C,data
 #-------------------------
 def decode_cjt188(data):
-    #print 'decode_cjt188 hex_str:',data.encode('hex')
+    print 'decode_cjt188 hex_str:',data.encode('hex')
     if ord(data[0]) != 0x68:
         print 'decode_cjt188 fail 1'
-        return -1,'',''
+        return -1,0,'',0,''
     
     # check len
     len_1 = len(data)
     if  len_1 < 13 or len_1 > 0x64:
         print 'decode_cjt188 fail 3'
-        return -3,'','',''
+        return -3,0,'',0,''
 
     len_2 = ord(data[10]) + 13
     if len_1 != len_2:
         print 'decode_cjt188 fail 4'    
-        return -4,'','',''
+        return -4,0,'',0,''
     
     # check tail 0x16
     if ord(data[len_2-1]) != 0x16:
         print 'decode_cjt188 fail 5'    
-        return -5,'','',''
+        return -5,0,'',0,''
     
     # check checksum
     cs = 0
     for i in xrange(0,len_2-2):
         #print hex(ord(data[i]))
         cs += ord(data[i])
+        cs = cs % 256
         
     #print 'cs 1:',hex(cs)
-    cs = cs % 256
-    #print 'cs 2:',hex(cs)
+    #cs = cs % 256
+    print 'caculate cs:',hex(cs)
+    print 'expected cs: ',data[len_2-2].encode('hex')
     
     if cs != ord(data[len_2-2]):
         print 'decode_cjt188 fail 6'    
-        return -6,'','',''    
+        return -6,0,'',0,'' 
    
     # extract data (sub 0x33)
     if ord(data[10]) > 0:
@@ -85,7 +93,7 @@ def decode_cjt188(data):
 # encode_cjt188
 #------------------------- 
 def encode_cjt188(t,addr,ctl,data):
-    print 'encode_cjt188:',str(t),str(addr),str(ctl),str(data)
+    #print 'encode_cjt188:',str(t),str(addr),str(ctl),str(data)
     data_tag_2 = ''
     lens_data = len(data)
     #for i in xrange(0,lens_data):
@@ -122,22 +130,81 @@ def cjt188_get_addr(serial):
         retcode,s1 = encode_cjt188(0xaa,'\xaa\xaa\xaa\xaa\xaa\xaa\xaa',C_READ_ADDR,'\x81\x0a\x00')
         if retcode < 0:
             return -2,''
-        cmd2 = '\xfe\xfe\xfe\xfe' + s1
-        #print 'cmd2:',cmd2.encode('hex')
+        cmd2 = '\xfe\xfe\xfe' + s1
+        print 'cmd2:',cmd2.encode('hex')
+        # for debug, please set debug_flag = 1
+        #debug_flag = 0
+
+        serial.write(cmd2)
+        #time.sleep(0.5)
+        resp = ''
+        c = ''
+        i = 0
+        n = 0
+        while i < SERIAL_TIMEOUT_CNT:
+            c = serial.read(1024)
+            if len(c) > 0:
+                resp += c
+                n = len(resp)
+                if c[-1] == '\x16' and n >= 13:
+                    break
+            else:
+                print '.'
+                time.sleep(0.1)
+                i += 1
+        
+        if i >= SERIAL_TIMEOUT_CNT:
+            return -3,0
+
+            
+        print 'resp:',resp.encode('hex')
+        resp1 = cjt188_rm_fe(resp)
+        
+        
+        ret,t,addr,ctl,data = decode_cjt188(resp1)
+        if ret == 0 and ctl == C_READ_ADDR_RESP:
+            print 'addr:',addr.encode('hex')
+            return ret,addr
+        else:
+            return -1,''
+        
+    except Exception as e:
+        print 'cjt188_get_addr exception!',str(e)
+        return -1,''
+
+
+#-------------------------
+# cjt188_set_addr
+#-------------------------    
+def cjt188_set_addr(serial,new_addr):
+    global debug_flag
+    print 'cjt188_set_addr ...',new_addr.encode('hex')
+    try:
+        #cmd2 = '\xfe\xfe\xfe\xfe\x68\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\x03\x03\x81\x0a\x00\x49\x16'
+        retcode,s1 = encode_cjt188(0xaa,'\xaa\xaa\xaa\xaa\xaa\xaa\xaa',C_SET_ADDR,'\xa0\x18\x00' + new_addr)
+        if retcode < 0:
+            return -2,''
+        cmd2 = '\xfe\xfe\xfe' + s1
+        print 'cmd2:',cmd2.encode('hex')
         # for debug, please set debug_flag = 1
         #debug_flag = 0
         if debug_flag != 1:
             serial.write(cmd2)
-            time.sleep(0.5)
+            #time.sleep(0.5)
             resp = ''
             c = ''
             i = 0
-            while c != '\x16' and i < SERIAL_TIMEOUT_CNT:
-                c = serial.read(1)
+            n = 0
+            while i < SERIAL_TIMEOUT_CNT:
+                c = serial.read(1024)
                 if len(c) > 0:
                     resp += c
+                    n = len(resp)
+                    if c[-1] == '\x16' and n >= 13:
+                        break
                 else:
                     print '.'
+                    time.sleep(0.1)
                     i += 1
             
             if i >= SERIAL_TIMEOUT_CNT:
@@ -148,13 +215,14 @@ def cjt188_get_addr(serial):
         #print 'resp1:',resp1
         
         ret,t,addr,ctl,data = decode_cjt188(resp1)
-        if ret == 0 and ctl == C_READ_ADDR_RESP:
+        if ret == 0 and ctl == C_SET_ADDR_RESP:
             print 'addr:',addr.encode('hex')
             return ret,addr
-            
+        else:
+            return -1,''
         
     except Exception as e:
-        print 'cjt188_get_addr exception!',str(e)
+        print 'cjt188_set_addr exception!',str(e)
         return -1,''
         
 #-------------------------
@@ -169,7 +237,7 @@ def cjt188_rm_fe(s):
     
 #-------------------------
 # cjt188_read_data
-# return: retcode,f1,f2,rt_s
+# return: retcode,f1,f2,rt_se
 # f1: flow_total ,unit 0.01 ton
 # f2: flow_today ,unit 0.01 ton
 #-------------------------    
@@ -177,36 +245,37 @@ def cjt188_read_data(serial,addr):
     global debug_flag
     print 'cjt188_read_data ...'
     try:
-        retcode,cmd2 = encode_cjt188(T_WATER_METER,addr,C_READ_DATA,'\x90\x0f\x00')
+        #retcode,cmd2 = encode_cjt188(T_WATER_METER,addr,C_READ_DATA,'\x90\x1f\x00')
+        retcode,cmd2 = encode_cjt188(T_WATER_METER,addr,C_READ_DATA,'\x1f\x90\x00')
+        #retcode,cmd2 = encode_cjt188(T_WATER_METER,'\x12\x00\x00\x00\x00\x00\x00',C_READ_DATA,'\x90\x1f\x00')
+        
         if retcode == -1:
             print 'cjt188_read_data debug 1'
-            return -1,''
-        cmd2 = '\xfe\xfe\xfe\xfe' + cmd2
-        
-        
+            return -1,0,0,''
+        cmd2 = '\xfe\xfe\xfe' + cmd2
+        print 'cmd2(hex):',cmd2.encode('hex')
         serial.write(cmd2)
-        time.sleep(0.5)
         resp = ''
         c = ''
         i = 0
         
-        # for debug, please set debug_flag = 1
-        #debug_flag = 1
-        if debug_flag != 1:
-        
-            while c != '\x16' and i < SERIAL_TIMEOUT_CNT:
-                c = serial.read(1)
-                if len(c) > 0:
-                    resp += c
-                else:
-                    print '.'
-                    i += 1
+        n = 0
+        while i < SERIAL_TIMEOUT_CNT:
+            c = serial.read(1024)
+            print 'c:',c.encode('hex')
+            if len(c) > 0:
+                resp += c
+                n = len(resp)
+                if c[-1] == '\x16' and n >= 13:
+                    break
+            else:
+                print '.'
+                time.sleep(0.1)
+                i += 1
                 
             if i >= SERIAL_TIMEOUT_CNT:
-                return -1,0
-        else:
-            resp = '\xfe\xfe\xfe\x68\x10\x12\x00\x00\x00\x00\x00\x00\x81\x16\x90\x1f\x00\x10\x00\x10\x00\x2c'
-            resp +='\x10\x00\x10\x00\x2c\x00\x00\x00\x00\x00\x00\x00\x00\xff\x67\x16'            
+                return -2,0,0,''
+          
         resp1 = cjt188_rm_fe(resp)    
         retcode,t,addr,ctl,data = decode_cjt188(resp1)
         print '======================================='
@@ -246,10 +315,10 @@ def cjt188_read_data(serial,addr):
             return retcode,f1,f2,rt_s
         else:
             print 'cjt188_read_data debug 2'        
-            return -1,0,0,''
+            return -3,0,0,''
     except Exception as e:
         print 'cjt188_read_data exception!',str(e)
-        return -1,0,0,''
+        return -4,0,0,''
 
 
     
@@ -271,41 +340,67 @@ if __name__ == '__main__':
         #retcode,addr = cjt188_get_addr(s)
         #print retcode,addr
          
-        print 'step1. test encode_cjt188' 
-        retcode,s1 = encode_cjt188(T_WATER_METER,'\x12\x00\x00\x00\x00\x00\x00',C_READ_DATA,'\x90\x1f\x00')
-        if s1 == '\x68\x10\x12\x00\x00\x00\x00\x00\x00\x01\x03\x90\x1f\x00\x3d\x16':
-            print 'encode_cjt188 passed'
-        else:
-            print 'encode_cjt188 failed'
-        
-        print 'step2. test decode_cjt188'
+        #print 'step1. test encode_cjt188' 
+        #retcode,s1 = encode_cjt188(T_WATER_METER,'\x12\x00\x00\x00\x00\x00\x00',C_READ_DATA,'\x90\x1f\x00')
+        #if s1 == '\x68\x10\x12\x00\x00\x00\x00\x00\x00\x01\x03\x90\x1f\x00\x3d\x16':
+        #    print 'encode_cjt188 passed'
+        #else:
+        #    print 'encode_cjt188 failed'
+        #
+        #print 'step2. test decode_cjt188'
 
-        s1 = '\xfe\xfe\xfe\x68\x10\x12\x00\x00\x00\x00\x00\x00\x81\x16\x90\x1f\x00\x10\x00\x10\x00\x2c'
-        s1 +='\x10\x00\x10\x00\x2c\x00\x00\x00\x00\x00\x00\x00\x00\xff\x67\x16'
+        #s1 = '\xfe\xfe\xfe\x68\x10\x12\x00\x00\x00\x00\x00\x00\x81\x16\x90\x1f\x00\x10\x00\x10\x00\x2c'
+        #s1 +='\x10\x00\x10\x00\x2c\x00\x00\x00\x00\x00\x00\x00\x00\xff\x67\x16'
             
-        s2 = cjt188_rm_fe(s1)
-        retcode,t,addr,ctl,data = decode_cjt188(s2)
-        if retcode == 0 and addr == '\x12\x00\x00\x00\x00\x00\x00' and ctl == C_READ_DATA_RESP:
-            print 'decode_cjt188 passed'
-        else:
-            print 'decode_cjt188 failed'
+        #s2 = cjt188_rm_fe(s1)
+        #retcode,t,addr,ctl,data = decode_cjt188(s2)
+        #if retcode == 0 and addr == '\x12\x00\x00\x00\x00\x00\x00' and ctl == C_READ_DATA_RESP:
+        #    print 'decode_cjt188 passed'
+        #else:
+        #    print 'decode_cjt188 failed'
     
     except Exception as e:
         print 'init serial error!',str(e)
         sys.exit(-1)
     
-    # read loop
-    # get meter data, unit : deng
+
+    # read meter addr
+    print '-----------------------------'
+    print 'get addr ...'
     while True:
         # get meter addr
         retcode,addr = cjt188_get_addr(s)
         #print retcode,addr
         if retcode < 0:
-            print 'get addr error'
-            time.sleep(5)
-            continue
+            print 'read addr fail! retry'
+            time.sleep(1)
             
-        print '-----------------------------------'
+            continue
+        else:
+            print 'read addr ok! addr(hex):',addr.encode('hex')
+            break
+    
+    #print '-----------------------------'
+    #print 'set addr ...'
+    # set meter addr
+    #while True:
+    #    # get meter addr
+    #    #retcode,addr = cjt188_set_addr(s,'\x01\x26\x02\x16\x20\x00\x00')
+    #    retcode,addr = cjt188_set_addr(s,'\x12\x00\x00\x00\x00\x00\x00')
+    #    #print retcode,addr
+    #    if retcode < 0:
+    #        print 'set addr fail! retry'
+    #        #time.sleep(0.1)
+    #        continue
+    #    else:
+    #        print 'set addr ok! addr(hex):',addr.encode('hex')
+    #        break
+    
+    print '-----------------------------------'
+    print 'read data ...'
+    time.sleep(1)
+    while True:            
+
         retcode,f1,f2,rt_s = cjt188_read_data(s,addr)
         print 'cjt188_read_data result:',retcode,f1,f2,rt_s
         time.sleep(5)
