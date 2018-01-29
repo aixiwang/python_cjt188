@@ -10,11 +10,11 @@
 #-------------------------------------
 # read addr                    yes
 # set addr                     yes
-# read meter data              test fail
+# read meter data              yes
 # reset base initial value     no
 #-------------------------------------
 # Found issues:
-# 1. checksum error  
+# 1. crc error -- fixed by changing usb M-Bus adapter (www.msi-automation.com)
 # 
 #---------------------------------------------------------------------------------------------
 import serial
@@ -43,7 +43,7 @@ debug_flag = 0
 # return: errcode,T,addr,C,data
 #-------------------------
 def decode_cjt188(data):
-    print 'decode_cjt188 hex_str:',data.encode('hex')
+    #print 'decode_cjt188 hex_str:',data.encode('hex')
     if ord(data[0]) != 0x68:
         print 'decode_cjt188 fail 1'
         return -1,0,'',0,''
@@ -73,8 +73,8 @@ def decode_cjt188(data):
         
     #print 'cs 1:',hex(cs)
     #cs = cs % 256
-    print 'caculate cs:',hex(cs)
-    print 'expected cs: ',data[len_2-2].encode('hex')
+    #print 'caculate cs:',hex(cs)
+    #print 'expected cs: ',data[len_2-2].encode('hex')
     
     if cs != ord(data[len_2-2]):
         print 'decode_cjt188 fail 6'    
@@ -131,7 +131,7 @@ def cjt188_get_addr(serial):
         if retcode < 0:
             return -2,''
         cmd2 = '\xfe\xfe\xfe' + s1
-        print 'cmd2:',cmd2.encode('hex')
+        #print 'cmd2:',cmd2.encode('hex')
         # for debug, please set debug_flag = 1
         #debug_flag = 0
 
@@ -157,7 +157,7 @@ def cjt188_get_addr(serial):
             return -3,0
 
             
-        print 'resp:',resp.encode('hex')
+        #print 'resp:',resp.encode('hex')
         resp1 = cjt188_rm_fe(resp)
         
         
@@ -185,7 +185,7 @@ def cjt188_set_addr(serial,new_addr):
         if retcode < 0:
             return -2,''
         cmd2 = '\xfe\xfe\xfe' + s1
-        print 'cmd2:',cmd2.encode('hex')
+        #print 'cmd2:',cmd2.encode('hex')
         # for debug, please set debug_flag = 1
         #debug_flag = 0
         if debug_flag != 1:
@@ -203,7 +203,7 @@ def cjt188_set_addr(serial,new_addr):
                     if c[-1] == '\x16' and n >= 13:
                         break
                 else:
-                    print '.'
+                    #print '.'
                     time.sleep(0.1)
                     i += 1
             
@@ -253,7 +253,7 @@ def cjt188_read_data(serial,addr):
             print 'cjt188_read_data debug 1'
             return -1,0,0,''
         cmd2 = '\xfe\xfe\xfe' + cmd2
-        print 'cmd2(hex):',cmd2.encode('hex')
+        #print 'cmd2(hex):',cmd2.encode('hex')
         serial.write(cmd2)
         resp = ''
         c = ''
@@ -262,7 +262,7 @@ def cjt188_read_data(serial,addr):
         n = 0
         while i < SERIAL_TIMEOUT_CNT:
             c = serial.read(1024)
-            print 'c:',c.encode('hex')
+            #print 'c:',c.encode('hex')
             if len(c) > 0:
                 resp += c
                 n = len(resp)
@@ -282,8 +282,7 @@ def cjt188_read_data(serial,addr):
         #print data.encode('hex')
         #print retcode,t,addr,ctl,data
         
-        if retcode == 0 and t == T_WATER_METER and ctl == C_READ_DATA_RESP:
-        # and len(data) == 0x16
+        if retcode == 0 and t == T_WATER_METER and ctl == C_READ_DATA_RESP and len(data) == 0x16:
             print 'data:',data.encode('hex'),len(data)
             #i = ord(data[7])/16 *10000000
             #i += ord(data[7])%16 *1000000
@@ -313,6 +312,25 @@ def cjt188_read_data(serial,addr):
             
      
             return retcode,f1,f2,rt_s
+            
+        if retcode == 0 and t == T_WATER_METER and ctl == C_READ_DATA_RESP and len(data) == 0x9:
+            print 'data:',data.encode('hex'),len(data)
+            #i = ord(data[7])/16 *10000000
+            #i += ord(data[7])%16 *1000000
+            # 
+            flow_total_s = data[3:7]
+            rt_s = data[13:13+7]
+            print 'flow_total_s(hex):',flow_total_s.encode('hex')
+            f1  = ord(flow_total_s[3])/16 * 10000000
+            f1 += ord(flow_total_s[3])%16 * 1000000
+            f1 += ord(flow_total_s[2])/16 * 100000
+            f1 += ord(flow_total_s[2])%16 * 10000
+            f1 += ord(flow_total_s[1])/16 * 1000
+            f1 += ord(flow_total_s[1])%16 * 100
+            f1 += ord(flow_total_s[0])/16 * 10
+            f1 += ord(flow_total_s[0])%16 * 1
+            return retcode,f1,None,None
+            
         else:
             print 'cjt188_read_data debug 2'        
             return -3,0,0,''
